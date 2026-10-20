@@ -30,10 +30,7 @@ import me.deecaad.weaponmechanics.listeners.ResourcePackListener;
 import me.deecaad.weaponmechanics.listeners.WeaponListeners;
 import me.deecaad.weaponmechanics.listeners.trigger.TriggerEntityListeners;
 import me.deecaad.weaponmechanics.listeners.trigger.TriggerPlayerListeners;
-import me.deecaad.weaponmechanics.packetlisteners.OutAbilitiesListener;
-import me.deecaad.weaponmechanics.packetlisteners.OutEntityEffectListener;
-import me.deecaad.weaponmechanics.packetlisteners.OutRemoveEntityEffectListener;
-import me.deecaad.weaponmechanics.packetlisteners.OutSetSlotBobFix;
+import me.deecaad.weaponmechanics.packetlisteners.*;
 import me.deecaad.weaponmechanics.weapon.WeaponHandler;
 import me.deecaad.weaponmechanics.weapon.WeaponSerializer;
 import me.deecaad.weaponmechanics.weapon.damage.BlockDamageData;
@@ -302,6 +299,7 @@ public class WeaponMechanics extends MechanicsPlugin {
         em.registerListener(new OutAbilitiesListener(), PacketListenerPriority.NORMAL);
         em.registerListener(new OutEntityEffectListener(), PacketListenerPriority.NORMAL);
         em.registerListener(new OutRemoveEntityEffectListener(), PacketListenerPriority.NORMAL);
+        em.registerListener(new InScopeReleaseListener(), PacketListenerPriority.NORMAL);
         if (configuration.getBoolean("Fix_Bobbing_Legacy", false)) {
             debugger.info("Enabling legacy bobbing fix for clients older than 1.21.4");
             em.registerListener(new OutSetSlotBobFix(this), PacketListenerPriority.NORMAL);

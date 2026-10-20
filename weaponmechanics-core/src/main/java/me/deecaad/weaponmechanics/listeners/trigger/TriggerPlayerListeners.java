@@ -1,16 +1,21 @@
 package me.deecaad.weaponmechanics.listeners.trigger;
 
 import com.cjcrafter.foliascheduler.util.MinecraftVersions;
+import com.github.retrooper.packetevents.PacketEvents;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerSetSlot;
+import io.github.retrooper.packetevents.util.SpigotConversionUtil;
 import me.deecaad.core.file.Configuration;
 import me.deecaad.core.utils.NumberUtil;
 import me.deecaad.weaponmechanics.WeaponMechanics;
 import me.deecaad.weaponmechanics.events.PlayerJumpEvent;
+import me.deecaad.weaponmechanics.utils.CustomTag;
 import me.deecaad.weaponmechanics.weapon.WeaponHandler;
 import me.deecaad.weaponmechanics.weapon.trigger.TriggerType;
 import me.deecaad.weaponmechanics.wrappers.PlayerWrapper;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
 import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
@@ -21,20 +26,11 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
-import org.bukkit.event.player.PlayerAnimationEvent;
-import org.bukkit.event.player.PlayerAnimationType;
-import org.bukkit.event.player.PlayerDropItemEvent;
-import org.bukkit.event.player.PlayerInteractAtEntityEvent;
-import org.bukkit.event.player.PlayerInteractEvent;
-import org.bukkit.event.player.PlayerJoinEvent;
-import org.bukkit.event.player.PlayerQuitEvent;
-import org.bukkit.event.player.PlayerSwapHandItemsEvent;
-import org.bukkit.event.player.PlayerToggleFlightEvent;
-import org.bukkit.event.player.PlayerToggleSneakEvent;
-import org.bukkit.event.player.PlayerToggleSprintEvent;
+import org.bukkit.event.player.*;
 import org.bukkit.inventory.EntityEquipment;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
 
 public class TriggerPlayerListeners implements Listener {
 
@@ -72,7 +68,73 @@ public class TriggerPlayerListeners implements Listener {
             // DOUBLE_SNEAK and START_SNEAK can be called nearly at same time
         }
 
+        EntityEquipment equipment = player.getEquipment();
+        if (equipment != null) {
+            ItemStack mainStack = equipment.getItemInMainHand();
+            String mainWeapon = weaponHandler.getInfoHandler().getWeaponTitle(mainStack, false);
+
+            // If holding a weapon, check for a scope attachment
+            if (mainWeapon != null) {
+                boolean hasScope = false;
+
+                // Read the attachments NBT array
+                if (CustomTag.ATTACHMENTS.hasStringArray(mainStack)) {
+                    for (String attachment : CustomTag.ATTACHMENTS.getStringArray(mainStack)) {
+
+                        // Check if the attachment name implies it is a scope
+                        // You can change this to match your exact attachment titles!
+                        if (attachment.toLowerCase().contains("scope") || attachment.equalsIgnoreCase("8x_Sniper_Scope")) {
+                            hasScope = true;
+                            break;
+                        }
+                    }
+                }
+
+                // ONLY send the fake spyglass if the gun actually has a scope
+                if (hasScope) {
+                    if (isSneaking) {
+                        // Send a fake Spyglass to the offhand (Slot 45)
+                        ItemStack spyglass = new ItemStack(Material.SPYGLASS);
+                        ItemMeta meta = spyglass.getItemMeta();
+                        if (meta != null) {
+                            NamespacedKey modelKey = new NamespacedKey("entrenched", "invis");
+
+                            meta.setItemModel(modelKey);
+                            spyglass.setItemMeta(meta);
+                        }
+                        WrapperPlayServerSetSlot packet = new WrapperPlayServerSetSlot(
+                                0, // Window ID (0 = Player Inventory)
+                                0, // State ID
+                                45, // Offhand Slot
+                                SpigotConversionUtil.fromBukkitItemStack(spyglass)
+                        );
+                        PacketEvents.getAPI().getPlayerManager().sendPacket(player, packet);
+                    } else {
+                        // Restore their actual offhand item when they let go of shift
+                        player.updateInventory();
+                    }
+                }
+            }
+        }
+
         weaponHandler.useTrigger(player, isSneaking ? TriggerType.START_SNEAK : TriggerType.END_SNEAK, false);
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onHeldItemChange(PlayerItemHeldEvent e) {
+        Player player = e.getPlayer();
+
+        // If they switch items while sneaking, they might still have the fake spyglass
+        if (player.isSneaking()) {
+
+            // Run exactly 1 tick later to ensure the server has processed the slot change
+            WeaponMechanics.getInstance().getFoliaScheduler().entity(player).runDelayed(() -> {
+
+                // This deletes the fake spyglass and forces the client to stop zooming
+                player.updateInventory();
+
+            }, 1L);
+        }
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -213,11 +275,34 @@ public class TriggerPlayerListeners implements Listener {
             if (weaponHandler.getInfoHandler().denyDualWielding(TriggerType.RIGHT_CLICK, player, mainWeapon, offWeapon))
                 return;
 
-            if (mainWeapon != null)
-                weaponHandler.tryUses(playerWrapper, mainWeapon, mainStack, EquipmentSlot.HAND, TriggerType.RIGHT_CLICK, dualWield, null);
+            if (mainWeapon != null) {
+                // --- NEW AMMO CHECK FOR SCOUTING ---
+                boolean hasScope = false;
+                if (me.deecaad.weaponmechanics.utils.CustomTag.ATTACHMENTS.hasStringArray(mainStack)) {
+                    for (String attachment : me.deecaad.weaponmechanics.utils.CustomTag.ATTACHMENTS.getStringArray(mainStack)) {
+                        if (attachment.toLowerCase().contains("scope") || attachment.equalsIgnoreCase("8x_Sniper_Scope")) {
+                            hasScope = true;
+                            break;
+                        }
+                    }
+                }
 
-            if (offWeapon != null)
+                int maxAmmo = WeaponMechanics.getInstance().getWeaponConfigurations().getInt(mainWeapon + ".Reload.Magazine_Size");
+                int currentAmmo = me.deecaad.weaponmechanics.utils.CustomTag.AMMO_LEFT.hasInteger(mainStack) ? me.deecaad.weaponmechanics.utils.CustomTag.AMMO_LEFT.getInteger(mainStack) : maxAmmo;
+
+
+                if (hasScope && player.isSneaking()) {
+                    // Do nothing! Let the InScopeReleaseListener handle the shot when they let go.
+                } else {
+                    // Shoot immediately!
+                    weaponHandler.tryUses(playerWrapper, mainWeapon, mainStack, EquipmentSlot.HAND, TriggerType.RIGHT_CLICK, dualWield, null);
+                }
+                // -----------------------------------
+            }
+
+            if (offWeapon != null) {
                 weaponHandler.tryUses(playerWrapper, offWeapon, offStack, EquipmentSlot.OFF_HAND, TriggerType.RIGHT_CLICK, dualWield, null);
+            }
             return;
         }
 
