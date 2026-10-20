@@ -3,12 +3,16 @@ name: CI
 on:
   push:
     branches: ["**"]
+    paths-ignore:
+      - "dist/**"
   pull_request:
     branches: ["**"]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -21,3 +25,33 @@ jobs:
 
       - name: Build & run tests
         run: ./gradlew clean build --no-daemon
+
+      - name: Upload plugin jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: WeaponMechanics
+          path: weaponmechanics-build/build/libs/WeaponMechanics-*.jar
+          if-no-files-found: error
+
+      - name: Commit plugin jar to dist/
+        if: github.event_name == 'push' && !endsWith(github.actor, '[bot]')
+        run: |
+          rm -rf dist
+          mkdir dist
+          cp weaponmechanics-build/build/libs/WeaponMechanics-*.jar dist/
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A dist
+          if git diff --cached --quiet; then
+            echo "No jar changes to commit"
+            exit 0
+          fi
+          git commit -m "ci: update built jar for ${GITHUB_SHA::7} [skip ci]"
+
+          # Retry in case another commit landed on the branch while we were building
+          for i in 1 2 3 4; do
+            git pull --rebase origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME" && exit 0
+            sleep $((i * 2))
+          done
+          exit 1
